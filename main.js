@@ -1,160 +1,183 @@
-const { Client, GatewayIntentBits, Partials, REST, Routes, EmbedBuilder } = require("discord.js");
-const fs = require("fs");
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActivityType
+} = require('discord.js');
+const fs = require('fs');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 const TOKEN = 'YOUR_BOT_TOKEN';
 const CLIENT_ID = 'YOUR_CLIENT_ID';
-const OWNER_ID = 'YOUR_USER_ID';
-const WEBHOOK_URL = 'YOUR_WEBHOOK_URL';
+const OWNER_ID = 'YOUR_OWNER_ID';
+const PREFIX = '!a';
 
 const client = new Client({
-intents: [
-GatewayIntentBits.Guilds,
-GatewayIntentBits.GuildMembers,
-GatewayIntentBits.GuildMessages,
-GatewayIntentBits.MessageContent
-],
-partials: [Partials.Channel]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildInvites
+  ],
+  partials: [Partials.Channel]
 });
 
-const PREFIX = 'a!';
-const blacklist = {
-users: new Set(),
-servers: new Set()
-};
-
-const webhookClient = new (require("discord.js")).WebhookClient({ url: WEBHOOK_URL });
-
-client.once('ready', async () => {
-console.log(Bot ready as ${client.user.tag});
-client.user.setPresence({
-status: 'dnd',
-activities: [{ name: 'a!help', type: 0 }]
-});
-
-// Register slash commands  
-const commands = [  
-    {  
-        name: 'help',  
-        description: 'Show all commands'  
-    }  
-];  
-
-const rest = new REST({ version: '10' }).setToken(TOKEN);  
-await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-
-});
-
-client.on('interactionCreate', async interaction => {
-if (!interaction.isCommand()) return;
-
-const { commandName } = interaction;  
-
-if (commandName === 'help') {  
-    const helpEmbed = new EmbedBuilder()  
-        .setTitle("📜 Help Menu")  
-        .setColor("Blue")  
-        .setDescription(`**Prefix Commands:**\n
-
-`a!kick [@user|ID] [reason?]`
-`a!ban [@user|ID] [reason?]`
-`a!mute [@user|ID] [reason?]`
-`a!role [@user] [@role]`
-`a!removerole [@user] [@role]`
-`a!blacklist user/server [id]`
-`a!unblacklist user/server [id]``);
-
-return interaction.reply({ embeds: [helpEmbed], ephemeral: true });  
+let blacklist = { users: [], servers: [] };
+if (fs.existsSync('blacklist.json')) {
+  try {
+    blacklist = JSON.parse(fs.readFileSync('blacklist.json'));
+  } catch {
+    blacklist = { users: [], servers: [] };
+  }
+}
+function saveBlacklist() {
+  fs.writeFileSync('blacklist.json', JSON.stringify(blacklist, null, 2));
+}
+function isBlacklisted(userId, guildId) {
+  return blacklist.users.includes(userId) || blacklist.servers.includes(guildId);
 }
 
-});
+async function realBypass(startUrl) {
+  const startTime = Date.now();
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
 
-client.on("messageCreate", async msg => {
-if (msg.author.bot || !msg.guild || !msg.content.toLowerCase().startsWith(PREFIX.toLowerCase())) return;
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-if (blacklist.servers.has(msg.guild.id) || blacklist.users.has(msg.author.id)) return;  
+    const selectors = [
+      'button#skip', 'a#skip', '.skip-btn', '.btn-skip', 
+      'a.btn-primary', 'a.continue', 'button.continue'
+    ];
 
-const args = msg.content.slice(PREFIX.length).trim().split(/ +/);  
-const command = args.shift().toLowerCase();  
+    for (const selector of selectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 5000 });
+        await page.click(selector);
+        await page.waitForTimeout(3000);
+        break;
+      } catch {}
+    }
 
-const log = async (action, target, reason) => {  
-    await webhookClient.send({  
-        embeds: [new EmbedBuilder()  
-            .setTitle(`${action} Log`)  
-            .setDescription(`**Executor:** ${msg.author.tag}\n**Target:** ${target}\n**Reason:** ${reason || 'No reason provided'}`)  
-            .setColor('Red')  
-            .setTimestamp()]  
-    });  
-};  
-
-if (['kick'].includes(command)) {  
-    const member = msg.mentions.members.first() || await msg.guild.members.fetch(args[0]).catch(() => null);  
-    const reason = args.slice(1).join(' ') || 'No reason provided';  
-    if (!member) return msg.reply("User not found.");  
-    await member.kick(reason).catch(() => msg.reply("Failed to kick."));  
-    await msg.reply(`✅ Kicked ${member.user.tag}`);  
-    await log("Kick", member.user.tag, reason);  
-}  
-
-if (['ban'].includes(command)) {  
-    const member = msg.mentions.members.first() || await msg.guild.members.fetch(args[0]).catch(() => null);  
-    const reason = args.slice(1).join(' ') || 'No reason provided';  
-    if (!member) return msg.reply("User not found.");  
-    await member.ban({ reason }).catch(() => msg.reply("Failed to ban."));  
-    await msg.reply(`✅ Banned ${member.user.tag}`);  
-    await log("Ban", member.user.tag, reason);  
-}  
-
-if (['mute'].includes(command)) {  
-    const member = msg.mentions.members.first() || await msg.guild.members.fetch(args[0]).catch(() => null);  
-    const reason = args.slice(1).join(' ') || 'No reason provided';  
-    if (!member) return msg.reply("User not found.");  
-    await member.timeout(60_000, reason).catch(() => msg.reply("Failed to timeout."));  
-    await msg.reply(`✅ Muted ${member.user.tag} for 1 min`);  
-    await log("Mute", member.user.tag, reason);  
-}  
-
-if (['role'].includes(command)) {  
-    const member = msg.mentions.members.first();  
-    const role = msg.mentions.roles.first();  
-    if (!member || !role) return msg.reply("Mention both user and role.");  
-    await member.roles.add(role).catch(() => msg.reply("Failed to give role."));  
-    await msg.reply(`✅ Gave ${role.name} to ${member.user.tag}`);  
-    await log("Role Grant", member.user.tag, role.name);  
-}  
-
-if (['removerole'].includes(command)) {  
-    const member = msg.mentions.members.first();  
-    const role = msg.mentions.roles.first();  
-    if (!member || !role) return msg.reply("Mention both user and role.");  
-    await member.roles.remove(role).catch(() => msg.reply("Failed to remove role."));  
-    await msg.reply(`✅ Removed ${role.name} from ${member.user.tag}`);  
-    await log("Role Removal", member.user.tag, role.name);  
-}  
-
-if (['help'].includes(command)) {  
-    return msg.reply("Use `/help` or `a!help` to see all commands.");  
-}  
-
-if (['blacklist'].includes(command)) {  
-    if (msg.author.id !== OWNER_ID) return msg.reply("Only the owner can use this.");  
-    const type = args[0];  
-    const id = args[1];  
-    if (!type || !id) return msg.reply("Usage: `!blacklist user/server id`");  
-    if (type === "user") blacklist.users.add(id);  
-    if (type === "server") blacklist.servers.add(id);  
-    return msg.reply(`✅ Blacklisted ${type} ${id}`);  
-}  
-
-if (['unblacklist'].includes(command)) {  
-    if (msg.author.id !== OWNER_ID) return msg.reply("Only the owner can use this.");  
-    const type = args[0];  
-    const id = args[1];  
-    if (!type || !id) return msg.reply("Usage: `!unblacklist user/server id`");  
-    if (type === "user") blacklist.users.delete(id);  
-    if (type === "server") blacklist.servers.delete(id);  
-    return msg.reply(`✅ Unblacklisted ${type} ${id}`);  
+    await page.waitForTimeout(10000);
+    const finalUrl = page.url();
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    await browser.close();
+    return { success: true, result: finalUrl, time: elapsed };
+  } catch (err) {
+    if (browser) await browser.close();
+    return { success: false, error: err.message };
+  }
 }
 
+client.on('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  client.user.setPresence({
+    status: 'dnd',
+    activities: [{ name: `${PREFIX} help`, type: ActivityType.Playing }]
+  });
+  setInterval(() => {
+    client.user.setActivity(`${client.guilds.cache.size} servers`, { type: ActivityType.Watching });
+  }, 15000);
+});
+
+const bypassCommands = ['fluxus', 'codex', 'delta', 'krnl', 'arceus'];
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  const { commandName, user, guild, options } = interaction;
+
+  if (isBlacklisted(user.id, guild?.id)) {
+    const msg = blacklist.users.includes(user.id) ? 'You are blacklisted.' : 'This server is blacklisted.';
+    return interaction.reply({ content: msg, ephemeral: true });
+  }
+
+  if (commandName === 'help') {
+    const embed = new EmbedBuilder()
+      .setTitle('Help')
+      .setColor('Blue')
+      .setDescription(
+        bypassCommands.map(cmd => `• \`/${cmd} <url>\``).join('\n') + '\n• `/help`'
+      );
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  if (bypassCommands.includes(commandName)) {
+    const url = options.getString('url');
+    await interaction.deferReply();
+    const result = await realBypass(url);
+    if (result.success) {
+      const embed = new EmbedBuilder()
+        .setTitle(`${commandName.toUpperCase()} Bypassed`)
+        .setColor('Green')
+        .addFields(
+          { name: 'Final Link', value: result.result },
+          { name: 'Time Taken', value: `${result.time}s` }
+        )
+        .setFooter({ text: 'https://discord.gg/7UPrQXQhR9' });
+      return interaction.editReply({ embeds: [embed] });
+    } else {
+      const embed = new EmbedBuilder()
+        .setTitle(`${commandName.toUpperCase()} Failed`)
+        .setColor('Red')
+        .setDescription(`Error: ${result.error}`);
+      return interaction.editReply({ embeds: [embed] });
+    }
+  }
+});
+
+client.on('messageCreate', async (message) => {
+  if (!message.content.startsWith(PREFIX) || message.author.bot) return;
+  const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const cmd = args.shift()?.toLowerCase();
+  const id = args[0];
+
+  if (isBlacklisted(message.author.id, message.guild?.id)) {
+    return message.reply(
+      blacklist.users.includes(message.author.id)
+        ? 'You are blacklisted.'
+        : 'This server is blacklisted.'
+    );
+  }
+
+  if (cmd === 'blacklist') {
+    if (message.author.id !== OWNER_ID) return;
+    if (!id) return message.reply('Provide a user or server ID.');
+    if (!blacklist.users.includes(id) && !blacklist.servers.includes(id)) {
+      blacklist.users.push(id);
+      saveBlacklist();
+      return message.channel.send(`Blacklisted: ${id}`);
+    } else return message.reply('Already blacklisted.');
+  }
+
+  if (cmd === 'unblacklist') {
+    if (message.author.id !== OWNER_ID) return;
+    if (!id) return message.reply('Provide an ID.');
+    blacklist.users = blacklist.users.filter(x => x !== id);
+    blacklist.servers = blacklist.servers.filter(x => x !== id);
+    saveBlacklist();
+    return message.channel.send(`Unblacklisted: ${id}`);
+  }
+
+  if (cmd === 'invites') {
+    if (message.author.id !== OWNER_ID) return;
+    try {
+      const invites = await message.guild.invites.fetch();
+      const list = invites.map(inv => `• ${inv.code} (${inv.uses ?? 0} uses)`).join('\n') || 'None.';
+      await message.author.send(`Invites for ${message.guild.name}:\n${list}`);
+      return message.reply('Check your DMs.');
+    } catch {
+      return message.reply('Could not fetch invites.');
+    }
+  }
 });
 
 client.login(TOKEN);
