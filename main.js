@@ -1,63 +1,27 @@
-const {
-  Client,
-  GatewayIntentBits,
-  Events,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  Collection,
-  AttachmentBuilder,
-  EmbedBuilder,
-  ActivityType,
-  PresenceUpdateStatus
-} = require('discord.js');
+const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder, Collection, AttachmentBuilder, EmbedBuilder, ActivityType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
 // ==== CONFIG ====
-const token = ''; // heil hilter
-const clientId = '1379963473014030397';
-const ownerId = '1366920828356399276';
+const token = 'YOUR_BOT_TOKEN';
+const clientId = 'YOUR_CLIENT_ID';
+const ownerId = 'YOUR_OWNER_ID';
 
 // ==== INIT ====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
+
 client.commands = new Collection();
 client.blacklistedGuilds = new Set();
 
-// ==== LUA OBFUSCATOR ====
-function obfuscateLua(code) {
-  let varIndex = 0;
-  const varMap = {};
-  const encodedStrings = {};
-  const identifier = /([a-zA-Z_][a-zA-Z0-9_]*)/g;
-
-  // Variable renaming
-  code = code.replace(identifier, (match) => {
-    if (['if', 'then', 'end', 'function', 'local', 'for', 'while', 'do', 'return'].includes(match)) return match;
-    if (!varMap[match]) varMap[match] = '_x' + (++varIndex).toString(36);
-    return varMap[match];
-  });
-
-  // String encoding
-  code = code.replace(/"(.*?)"/g, (_, str) => {
-    let encoded = str.split('').map(c => `\\${c.charCodeAt(0)}`).join('');
-    return `"${encoded}"`;
-  });
-
-  // Wrap in fake junk
-  const junk = `--[[ Obfuscated by Alchemist ]]\nlocal __junk = "${Math.random().toString(36).repeat(10)}"\n`;
-  return junk + code;
-}
-
-// ==== DEFINE /obfuscate COMMAND ====
+// ==== OBFSUCATE COMMAND ====
 const obfuscateCommand = new SlashCommandBuilder()
   .setName('obfuscate')
-  .setDescription('Obfuscates code with real logic.')
+  .setDescription('Obfuscates code with fake junk.')
   .addStringOption(opt =>
     opt.setName('language')
-      .setDescription('Language (lua only for now)')
+      .setDescription('Language (js, py, lua)')
       .setRequired(true))
   .addStringOption(opt =>
     opt.setName('code')
@@ -67,15 +31,21 @@ const obfuscateCommand = new SlashCommandBuilder()
 client.commands.set('obfuscate', {
   data: obfuscateCommand,
   async execute(interaction) {
-    const language = interaction.options.getString('language');
+    const language = interaction.options.getString('language').toLowerCase();
     const code = interaction.options.getString('code');
 
-    if (language !== 'lua') {
-      return interaction.reply({ content: '❌ Only `lua` is supported for now.', ephemeral: true });
+    let obfuscated = '';
+
+    if (language === 'lua') {
+      const junk = `-- ${Math.random().toString(36).substring(2, 10)}\n`.repeat(20);
+      const replaced = code.replace(/([a-zA-Z_]\w*)/g, v => `var_${Math.random().toString(36).substring(2, 6)}`);
+      obfuscated = `-- Obfuscated by Alchemist\n${junk}\n${replaced}`;
+    } else {
+      const junk = `// ${Math.random().toString(36).substring(2, 10)}\n`.repeat(20);
+      obfuscated = `// Obfuscated by Alchemist\n// Language: ${language}\n\n${junk}${code}`;
     }
 
-    const obfuscated = obfuscateLua(code);
-    const filePath = path.join(__dirname, 'Obfuscated.lua');
+    const filePath = path.join(__dirname, 'Obfuscated.txt');
     fs.writeFileSync(filePath, obfuscated);
 
     const embed = new EmbedBuilder()
@@ -89,57 +59,43 @@ client.commands.set('obfuscate', {
       await interaction.user.send({ embeds: [embed], files: [file] });
       await interaction.reply({ content: '📬 Sent obfuscated file to your DMs!', ephemeral: true });
     } catch {
-      await interaction.reply({ content: '❌ Could not send DM. Check privacy settings.', ephemeral: true });
+      await interaction.reply({ content: '❌ Could not send DM. Please check your privacy settings.', ephemeral: true });
     }
 
     fs.unlinkSync(filePath);
   }
 });
 
-// ==== GUILD-SPECIFIC SLASH REGISTRATION ====
-client.on(Events.GuildCreate, async (guild) => {
-  const rest = new REST({ version: '10' }).setToken(token);
-  try {
-    await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {
-      body: [obfuscateCommand.toJSON()]
-    });
-    console.log(`✅ Slash command registered for ${guild.name} (${guild.id})`);
-  } catch (err) {
-    console.error(`❌ Failed to register command for guild ${guild.id}:`, err);
-  }
-});
-
-// ==== EVENT: BOT READY ====
+// ==== REGISTER PER-GUILD COMMANDS ON STARTUP ====
 client.once(Events.ClientReady, async () => {
-  const guildCount = client.guilds.cache.size;
-
-  // Register for all joined guilds
+  console.log(`✅ Logged in as ${client.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(token);
-  for (const [guildId] of client.guilds.cache) {
+
+  for (const guild of client.guilds.cache.values()) {
     try {
-      await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-        body: [obfuscateCommand.toJSON()]
-      });
-      console.log(`✅ Slash command registered for guild ${guildId}`);
+      await rest.put(
+        Routes.applicationGuildCommands(clientId, guild.id),
+        { body: [obfuscateCommand.toJSON()] }
+      );
+      console.log(`✅ Registered command for guild ${guild.name} (${guild.id})`);
     } catch (err) {
-      console.error(`❌ Failed to register command for ${guildId}:`, err);
+      console.error(`❌ Failed to register in ${guild.id}:`, err);
     }
   }
 
   client.user.setPresence({
     status: 'dnd',
     activities: [{
-      name: `/obfuscate | ${guildCount} Servers`,
+      name: `/obfuscate | Servers: ${client.guilds.cache.size}`,
       type: ActivityType.Playing
     }]
   });
-
-  console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ==== INTERACTION HANDLER ====
+// ==== SLASH COMMAND HANDLER ====
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   if (client.blacklistedGuilds.has(interaction.guildId)) {
     return interaction.reply({ content: '❌ This server is blacklisted.', ephemeral: true });
   }
@@ -155,7 +111,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// ==== MESSAGE BLACKLIST CONTROLS ====
+// ==== BLACKLIST MESSAGE COMMAND ====
 client.on(Events.MessageCreate, message => {
   if (!message.content.startsWith('!a')) return;
   if (message.author.id !== ownerId) return;
