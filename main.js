@@ -1,183 +1,178 @@
 const {
   Client,
   GatewayIntentBits,
-  Partials,
+  Events,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  Collection,
+  AttachmentBuilder,
   EmbedBuilder,
   ActivityType
 } = require('discord.js');
 const fs = require('fs');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(StealthPlugin());
+const path = require('path');
 
-const TOKEN = 'YOUR_BOT_TOKEN'; // 🔁 Replace this
-const CLIENT_ID = 'YOUR_CLIENT_ID'; // 🔁 Replace this
-const OWNER_ID = 'YOUR_OWNER_ID'; // 🔁 Replace this
-const PREFIX = '!a';
+// ==== CONFIG ====
+const token = '';
+const clientId = '1379963473014030397';
+const ownerId = '1366920828356399276';
 
+// ==== INIT ====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildInvites
+    GatewayIntentBits.MessageContent
   ],
-  partials: [Partials.Channel]
-});
-
-let blacklist = { users: [], servers: [] };
-if (fs.existsSync('blacklist.json')) {
-  try {
-    blacklist = JSON.parse(fs.readFileSync('blacklist.json'));
-  } catch {
-    blacklist = { users: [], servers: [] };
+  presence: {
+    status: 'dnd',
+    activities: [{ name: 'Loading...', type: ActivityType.Playing }]
   }
-}
-function saveBlacklist() {
-  fs.writeFileSync('blacklist.json', JSON.stringify(blacklist, null, 2));
-}
-function isBlacklisted(userId, guildId) {
-  return blacklist.users.includes(userId) || blacklist.servers.includes(guildId);
-}
+});
+client.commands = new Collection();
+client.blacklistedGuilds = new Set();
 
-async function realBypass(startUrl) {
-  const startTime = Date.now();
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+// ==== DEFINE /obfuscate COMMAND ====
+const obfuscateCommand = new SlashCommandBuilder()
+  .setName('obfuscate')
+  .setDescription('Obfuscates code with real Lua junk.')
+  .addStringOption(opt =>
+    opt.setName('language')
+      .setDescription('Language (currently only supports Lua)')
+      .setRequired(true))
+  .addStringOption(opt =>
+    opt.setName('code')
+      .setDescription('Code to obfuscate')
+      .setRequired(true));
 
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
-    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+client.commands.set('obfuscate', {
+  data: obfuscateCommand,
+  async execute(interaction) {
+    const language = interaction.options.getString('language').toLowerCase();
+    const code = interaction.options.getString('code');
 
-    const selectors = [
-      'button#skip', 'a#skip', '.skip-btn', '.btn-skip',
-      'a.btn-primary', 'a.continue', 'button.continue'
-    ];
-
-    for (const selector of selectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 });
-        await page.click(selector);
-        await page.waitForTimeout(3000);
-        break;
-      } catch {}
+    if (language !== 'lua') {
+      return interaction.reply({ content: '❌ Only Lua obfuscation is supported right now.', ephemeral: true });
     }
 
-    await page.waitForTimeout(10000);
-    const finalUrl = page.url();
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    await browser.close();
-    return { success: true, result: finalUrl, time: elapsed };
-  } catch (err) {
-    if (browser) await browser.close();
-    return { success: false, error: err.message };
-  }
-}
+    function obfuscateLua(lua) {
+      const varMap = new Map();
+      const getRandomName = () => '_' + Math.random().toString(36).substring(2, 10);
 
-client.on('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+      return '-- Obfuscated by Alchemist\n\n' + lua
+        .split('\n')
+        .map(line => {
+          // Rename variables and functions
+          line = line.replace(/\b(local\s+)?([a-zA-Z_]\w*)\b/g, (match, local, name) => {
+            if (['if', 'then', 'else', 'end', 'function', 'return', 'local', 'for', 'while', 'do', 'break'].includes(name)) return match;
+            if (!varMap.has(name)) varMap.set(name, getRandomName());
+            return local ? `local ${varMap.get(name)}` : varMap.get(name);
+          });
+
+          // Encode strings
+          line = line.replace(/"(.*?)"/g, (_, str) => `"\\x${Buffer.from(str).toString('hex')}"`);
+
+          // Random junk block
+          if (Math.random() < 0.2) {
+            line = `if ${Math.floor(Math.random() * 500)} == ${Math.floor(Math.random() * 500)} then\n  ${line}\nend`;
+          }
+
+          return line;
+        })
+        .join('\n');
+    }
+
+    const obfuscated = obfuscateLua(code);
+    const filePath = path.join(__dirname, 'Obfuscated.txt');
+    fs.writeFileSync(filePath, obfuscated);
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔐 Lua Obfuscation Complete')
+      .setDescription(`Your Lua code has been obfuscated.`)
+      .setColor('Green');
+
+    const file = new AttachmentBuilder(filePath);
+
+    try {
+      await interaction.user.send({ embeds: [embed], files: [file] });
+      await interaction.reply({ content: '📬 Obfuscated file sent to your DMs!', ephemeral: true });
+    } catch {
+      await interaction.reply({ content: '❌ Could not send DM. Check privacy settings.', ephemeral: true });
+    }
+
+    fs.unlinkSync(filePath);
+  }
+});
+
+// ==== EVENT: BOT READY ====
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  const rest = new REST({ version: '10' }).setToken(token);
+
+  const guilds = await client.guilds.fetch();
+  console.log(`🔁 Registering slash command in ${guilds.size} guild(s)...`);
+
+  for (const [guildId] of guilds) {
+    try {
+      await rest.put(
+        Routes.applicationGuildCommands(clientId, guildId),
+        { body: [obfuscateCommand.toJSON()] }
+      );
+      console.log(`✅ Registered command in guild ${guildId}`);
+    } catch (err) {
+      console.error(`❌ Failed in ${guildId}:`, err);
+    }
+  }
+
+  // Update status to show live server count
   client.user.setPresence({
     status: 'dnd',
-    activities: [{ name: `${PREFIX} help`, type: ActivityType.Playing }]
+    activities: [{
+      name: `/obfuscate | ${guilds.size} Servers`,
+      type: ActivityType.Playing
+    }]
   });
-  setInterval(() => {
-    client.user.setActivity(`${client.guilds.cache.size} servers`, { type: ActivityType.Watching });
-  }, 15000);
 });
 
-const bypassCommands = ['fluxus', 'codex', 'delta', 'krnl', 'arceus'];
-
-client.on('interactionCreate', async (interaction) => {
+// ==== EVENT: SLASH COMMAND ====
+client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
-  const { commandName, user, guild, options } = interaction;
-
-  if (isBlacklisted(user.id, guild?.id)) {
-    const msg = blacklist.users.includes(user.id) ? 'You are blacklisted.' : 'This server is blacklisted.';
-    return interaction.reply({ content: msg, ephemeral: true });
+  if (client.blacklistedGuilds.has(interaction.guildId)) {
+    return interaction.reply({ content: '❌ This server is blacklisted.', ephemeral: true });
   }
 
-  if (commandName === 'help') {
-    const embed = new EmbedBuilder()
-      .setTitle('Help')
-      .setColor('Blue')
-      .setDescription(
-        bypassCommands.map(cmd => `• \`/${cmd} <url>\``).join('\n') + '\n• `/help`'
-      );
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
 
-  if (bypassCommands.includes(commandName)) {
-    const url = options.getString('url');
-    await interaction.deferReply();
-    const result = await realBypass(url);
-    if (result.success) {
-      const embed = new EmbedBuilder()
-        .setTitle(`${commandName.toUpperCase()} Bypassed`)
-        .setColor('Green')
-        .addFields(
-          { name: 'Final Link', value: result.result },
-          { name: 'Time Taken', value: `${result.time}s` }
-        )
-        .setFooter({ text: 'https://discord.gg/7UPrQXQhR9' });
-      return interaction.editReply({ embeds: [embed] });
-    } else {
-      const embed = new EmbedBuilder()
-        .setTitle(`${commandName.toUpperCase()} Failed`)
-        .setColor('Red')
-        .setDescription(`Error: ${result.error}`);
-      return interaction.editReply({ embeds: [embed] });
-    }
+  try {
+    await command.execute(interaction);
+  } catch (err) {
+    console.error(err);
+    await interaction.reply({ content: '❌ Command error.', ephemeral: true });
   }
 });
 
-client.on('messageCreate', async (message) => {
-  if (!message.content.startsWith(PREFIX) || message.author.bot) return;
-  const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
-  const cmd = args.shift()?.toLowerCase();
-  const id = args[0];
+// ==== EVENT: TEXT COMMANDS ====
+client.on(Events.MessageCreate, message => {
+  if (!message.content.startsWith('!a')) return;
+  if (message.author.id !== ownerId) return;
 
-  if (isBlacklisted(message.author.id, message.guild?.id)) {
-    return message.reply(
-      blacklist.users.includes(message.author.id)
-        ? 'You are blacklisted.'
-        : 'This server is blacklisted.'
-    );
-  }
+  const [cmd, arg] = message.content.slice(3).trim().split(/ +/);
 
   if (cmd === 'blacklist') {
-    if (message.author.id !== OWNER_ID) return;
-    if (!id) return message.reply('Provide a user or server ID.');
-    if (!blacklist.users.includes(id) && !blacklist.servers.includes(id)) {
-      blacklist.users.push(id);
-      saveBlacklist();
-      return message.channel.send(`Blacklisted: ${id}`);
-    } else return message.reply('Already blacklisted.');
+    if (!arg) return message.reply('⚠️ Provide a guild ID.');
+    client.blacklistedGuilds.add(arg);
+    message.reply(`🔒 Guild \`${arg}\` blacklisted.`);
   }
 
   if (cmd === 'unblacklist') {
-    if (message.author.id !== OWNER_ID) return;
-    if (!id) return message.reply('Provide an ID.');
-    blacklist.users = blacklist.users.filter(x => x !== id);
-    blacklist.servers = blacklist.servers.filter(x => x !== id);
-    saveBlacklist();
-    return message.channel.send(`Unblacklisted: ${id}`);
-  }
-
-  if (cmd === 'invites') {
-    if (message.author.id !== OWNER_ID) return;
-    try {
-      const invites = await message.guild.invites.fetch();
-      const list = invites.map(inv => `• ${inv.code} (${inv.uses ?? 0} uses)`).join('\n') || 'None.';
-      await message.author.send(`Invites for ${message.guild.name}:\n${list}`);
-      return message.reply('Check your DMs.');
-    } catch {
-      return message.reply('Could not fetch invites.');
-    }
+    if (!arg) return message.reply('⚠️ Provide a guild ID.');
+    client.blacklistedGuilds.delete(arg);
+    message.reply(`🔓 Guild \`${arg}\` unblacklisted.`);
   }
 });
 
-client.login(TOKEN);
+// ==== LOGIN ====
+client.login(token);
