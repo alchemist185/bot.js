@@ -10,9 +10,9 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-const TOKEN = 'YOUR_BOT_TOKEN';
-const CLIENT_ID = 'YOUR_CLIENT_ID';
-const OWNER_ID = 'YOUR_OWNER_ID';
+const TOKEN = 'YOUR_BOT_TOKEN'; // 🔁 Replace this
+const CLIENT_ID = 'YOUR_CLIENT_ID'; // 🔁 Replace this
+const OWNER_ID = 'YOUR_OWNER_ID'; // 🔁 Replace this
 const PREFIX = '!a';
 
 const client = new Client({
@@ -54,7 +54,7 @@ async function realBypass(startUrl) {
     await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     const selectors = [
-      'button#skip', 'a#skip', '.skip-btn', '.btn-skip', 
+      'button#skip', 'a#skip', '.skip-btn', '.btn-skip',
       'a.btn-primary', 'a.continue', 'button.continue'
     ];
 
