@@ -1,17 +1,50 @@
-const {
-  Client,
-  GatewayIntentBits,
-  ActivityType,
-  AttachmentBuilder
-} = require('discord.js');
+const { Client, GatewayIntentBits, ActivityType, AttachmentBuilder } = require('discord.js');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const fs = require('fs');
 const path = require('path');
 
-// === CONFIG ===
-const token = 'MTM3OTk2MzQ3MzAxNDAzMDM5Nw.GWZdn4.0hPx84d7xAGxpTi-Svcv759kpPw1VvPLIXeFNo'; // Your bot token
+// ===== CONFIGURATION =====
+const token = 'YOUR_BOT_TOKEN_HERE';
 const prefix = '!a';
-const ownerId = '1366920828356399276';
+const ownerId = 'YOUR_DISCORD_USER_ID_HERE';
+const allowedGuildId = '1379252580391059616';
 
+// ===== LUA KEYWORDS =====
+const luaKeywords = new Set([
+  'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function',
+  'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return',
+  'then', 'true', 'until', 'while'
+]);
+
+function randomIdentifier() {
+  return '_' + Math.random().toString(36).slice(2, 10);
+}
+
+// ===== LUA OBFUSCATION =====
+function obfuscateLua(code) {
+  // Remove comments
+  code = code
+    .replace(/--[\s\S]*?/g, '')      // multi-line --[[ ... ]]
+    .replace(/--[^\n\r]*/g, '');             // single-line --
+
+  // Obfuscate string literals
+  code = code.replace(/(["'])(?:(?=(\\?))\2.)*?\1/g, (match) => {
+    const inner = match.slice(1, -1);
+    const chars = Array.from(inner).map(c => c.charCodeAt(0));
+    return `string.char(${chars.join(',')})`;
+  });
+
+  // Obfuscate identifiers
+  const identifiers = {};
+  return code.replace(/\b([A-Za-z_][A-Za-z0-9_]*)\b/g, (match) => {
+    if (luaKeywords.has(match)) return match;
+    if (/^(string|table|math|io|os|coroutine|debug)$/.test(match)) return match;
+    if (!identifiers[match]) identifiers[match] = randomIdentifier();
+    return identifiers[match];
+  });
+}
+
+// ===== DISCORD CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -20,83 +53,113 @@ const client = new Client({
   ]
 });
 
-client.blacklistedUsers = new Set();
-client.blacklistedGuilds = new Set();
+const blacklistedUsers = new Set();
+const blacklistedGuilds = new Set();
 
+// ===== ON READY =====
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({
     status: 'dnd',
     activities: [{
-      name: `!a obscuate | ${client.guilds.cache.size} servers`,
+      name: `${prefix} obfuscate | ${client.guilds.cache.size} servers`,
       type: ActivityType.Playing
     }]
   });
 });
 
+client.on('guildCreate', () => {
+  client.user.setPresence({
+    status: 'dnd',
+    activities: [{
+      name: `${prefix} obfuscate | ${client.guilds.cache.size} servers`,
+      type: ActivityType.Playing
+    }]
+  });
+});
+client.on('guildDelete', () => {
+  client.user.setPresence({
+    status: 'dnd',
+    activities: [{
+      name: `${prefix} obfuscate | ${client.guilds.cache.size} servers`,
+      type: ActivityType.Playing
+    }]
+  });
+});
+
+// ===== MESSAGE HANDLER =====
 client.on('messageCreate', async (message) => {
-  if (!message.content.startsWith(prefix)) return;
-  if (client.blacklistedUsers.has(message.author.id)) return;
-  if (client.blacklistedGuilds.has(message.guildId)) return;
+  if (message.author.bot || !message.content.startsWith(prefix)) return;
+  if (message.guildId !== allowedGuildId) return; // Only allow in specified server
+
+  if (blacklistedUsers.has(message.author.id) || blacklistedGuilds.has(message.guildId)) return;
 
   const args = message.content.slice(prefix.length).trim().split(/ +/);
-  const command = args.shift()?.toLowerCase();
+  const command = args.shift().toLowerCase();
 
-  // == Obfuscate Command ==
-  if (command === 'obscuate') {
-    if (args.length === 0 && message.attachments.size === 0) {
-      return message.reply('⚠️ Provide code or attach a file.');
-    }
-
-    let code = args.join(' ');
-
-    if (!code && message.attachments.size > 0) {
-      const attachment = message.attachments.first();
-      const fileData = await fetch(attachment.url).then(res => res.text());
-      code = fileData;
-    }
-
-    const obfuscated = `-- Obfuscated with Alchemist\nloadstring(game:HttpGet("data:text/plain;base64,${Buffer.from(code).toString('base64')}"))()`;
-
-    const filePath = path.join(__dirname, 'obfuscated.lua');
-    fs.writeFileSync(filePath, obfuscated);
-    const file = new AttachmentBuilder(filePath);
-
-    try {
-      await message.author.send({
-        content: '🔐 Obfuscated code:',
-        files: [file]
-      });
-      await message.reply('📬 Sent obfuscated file to your DMs.');
-    } catch {
-      await message.reply('❌ Could not send DM. Please check your privacy settings.');
-    }
-
-    fs.unlinkSync(filePath);
-  }
-
-  // == Blacklist Commands (owner only) ==
+  // ===== OWNER BLACKLIST CONTROLS =====
   if (message.author.id === ownerId) {
     if (command === 'blacklist') {
       const id = args[0];
-      if (!id) return message.reply('⚠️ Provide a user or guild ID.');
+      if (!id) return message.reply('⚠️ Usage: `!a blacklist <userID|guildID>`');
       if (id.length === 18) {
-        client.blacklistedUsers.add(id);
-        message.reply(`🔒 User \`${id}\` blacklisted.`);
+        blacklistedUsers.add(id);
+        return message.reply(`🔒 User \`${id}\` has been blacklisted.`);
       } else {
-        client.blacklistedGuilds.add(id);
-        message.reply(`🔒 Guild \`${id}\` blacklisted.`);
+        blacklistedGuilds.add(id);
+        return message.reply(`🔒 Guild \`${id}\` has been blacklisted.`);
       }
     }
 
     if (command === 'unblacklist') {
       const id = args[0];
-      if (!id) return message.reply('⚠️ Provide a user or guild ID.');
-      client.blacklistedUsers.delete(id);
-      client.blacklistedGuilds.delete(id);
-      message.reply(`🔓 ID \`${id}\` unblacklisted.`);
+      if (!id) return message.reply('⚠️ Usage: `!a unblacklist <userID|guildID>`');
+      blacklistedUsers.delete(id);
+      blacklistedGuilds.delete(id);
+      return message.reply(`🔓 ID \`${id}\` has been unblacklisted.`);
     }
+  }
+
+  // ===== OBFUSCATE COMMAND =====
+  if (command === 'obfuscate') {
+    let code = args.join(' ');
+
+    if (!code && message.attachments.size > 0) {
+      const attachment = message.attachments.first();
+      try {
+        const response = await fetch(attachment.url);
+        code = await response.text();
+      } catch {
+        return message.reply('❌ Failed to download attachment.');
+      }
+    }
+
+    if (!code) return message.reply('⚠️ Provide code inline or attach a Lua file.');
+
+    let obfuscated;
+    try {
+      obfuscated = obfuscateLua(code);
+    } catch (err) {
+      return message.reply('❌ Obfuscation failed. Invalid code or internal error.');
+    }
+
+    const filePath = path.join(__dirname, `obfuscated_${Date.now()}.lua`);
+    fs.writeFileSync(filePath, obfuscated);
+    const file = new AttachmentBuilder(filePath);
+
+    try {
+      await message.author.send({
+        content: '🔐 Here is your obfuscated Lua code:',
+        files: [file]
+      });
+      await message.reply('📬 I sent you a DM with the obfuscated file.');
+    } catch {
+      await message.reply('❌ Could not send you a DM. Check your privacy settings.');
+    }
+
+    fs.unlink(filePath, () => {});
   }
 });
 
+// ===== LOGIN =====
 client.login(token);
